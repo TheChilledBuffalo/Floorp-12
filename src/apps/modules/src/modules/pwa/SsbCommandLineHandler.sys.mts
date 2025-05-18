@@ -18,21 +18,10 @@ export const PWA_WINDOW_NAME = "FloorpPWAWindow";
 type TQueryInterface = <T extends nsIID>(aIID: T) => nsQIResult<T>;
 
 export class SsbRunnerUtils {
-  static openSsbWindow(ssb: Manifest, initialLaunch: boolean = false) {
+  static openSsbWindow(ssb: Manifest, initialLaunch = false) {
     let initialLaunchWin: nsIDOMWindow | null = null;
-    if (initialLaunch) {
-      initialLaunchWin = Services.ww.openWindow(
-        null as unknown as mozIDOMWindowProxy,
-        AppConstants.BROWSER_CHROME_URL,
-        "_blank",
-        "",
-        {},
-      ) as nsIDOMWindow;
-    }
 
-    const browserWindowFeatures =
-      "chrome,location=yes,centerscreen,dialog=no,resizable=yes,scrollbars=yes";
-
+    // SSB用ウィンドウを開く前にフラグを設定
     const args = Cc["@mozilla.org/supports-string;1"].createInstance(
       Ci.nsISupportsString,
     );
@@ -40,7 +29,10 @@ export class SsbRunnerUtils {
     args.data = ssb.start_url;
 
     const uniqueWindowName = `${PWA_WINDOW_NAME}_${ssb.id}_${Date.now()}`;
+    const browserWindowFeatures =
+      "chrome,location=yes,centerscreen,dialog=no,resizable=yes,scrollbars=yes";
 
+    // SSB専用ウィンドウを開く
     const win = Services.ww.openWindow(
       null as unknown as mozIDOMWindowProxy,
       AppConstants.BROWSER_CHROME_URL,
@@ -50,9 +42,21 @@ export class SsbRunnerUtils {
     ) as nsIDOMWindow;
 
     win.focus();
-    SessionStore.promiseAllWindowsRestored.then(() => {
-      initialLaunchWin?.close();
-    });
+
+    // 初期起動の場合のみ、通常のブラウザウィンドウを開く
+    if (initialLaunch) {
+      // セッション復元完了を待ってから通常ウィンドウを開く
+      SessionStore.promiseAllWindowsRestored.then(() => {
+        initialLaunchWin = Services.ww.openWindow(
+          null as unknown as mozIDOMWindowProxy,
+          AppConstants.BROWSER_CHROME_URL,
+          "_blank",
+          "",
+          {},
+        ) as nsIDOMWindow;
+      });
+    }
+
     return win;
   }
 
@@ -68,12 +72,10 @@ export class SsbRunnerUtils {
 }
 
 async function startSSBFromCmdLine(id: string) {
-  // Loading the SSB is async. Until that completes and launches we will
-  // be without an open window and the platform will not continue startup
-  // in that case. Flag that a window is coming.
+  // サバイバルエリアに入る (ウィンドウなしでの起動を許可)
   Services.startup.enterLastWindowClosingSurvivalArea();
 
-  // Whatever happens we must exitLastWindowClosingSurvivalArea when done.
+  // 必ずサバイバルエリアを出る
   try {
     const { DataStoreProvider } = ChromeUtils.importESModule(
       "resource://noraneko/modules/pwa/DataStore.sys.mjs",
@@ -85,12 +87,19 @@ async function startSSBFromCmdLine(id: string) {
     for (const value of Object.values(ssbData)) {
       if ((value as Manifest).id === id) {
         const ssb = value as Manifest;
+
+        // SSBウィンドウを開く
+        // initialLaunchをtrueにして、SSBウィンドウ開いた後で
+        // 通常のブラウザウィンドウを開くようにする
         const win = SsbRunnerUtils.openSsbWindow(ssb, true);
+
+        // Windowsの統合機能を適用
         await SsbRunnerUtils.applyWindowsIntegration(ssb, win);
         break;
       }
     }
   } finally {
+    // 処理完了後、サバイバルエリアを出る
     Services.startup.exitLastWindowClosingSurvivalArea();
   }
 }
